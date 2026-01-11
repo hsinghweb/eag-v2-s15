@@ -317,9 +317,78 @@ Keep markdown formatting intact.
 
 
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Thread Safety Lock for PyMuPDF
+pdf_lock = threading.Lock()
+
+def process_single_file(file, cache_meta):
+    """Worker function to process a single file"""
+    try:
+        # Check cache inside worker (read-only access to cache_meta is safe)
+        fhash = hashlib.md5(Path(file).read_bytes()).hexdigest()
+        if file.name in cache_meta and cache_meta[file.name] == fhash:
+            return None # Skip
+
+        mcp_log("PROC", f"Processing: {file.name}")
+        ext = file.suffix.lower()
+        markdown = ""
+
+        if ext == ".pdf":
+            # 🔒 LOCK REQUIRED for PyMuPDF
+            with pdf_lock:
+                mcp_log("INFO", f"Using MuPDF4LLM to extract {file.name}")
+                markdown = convert_pdf_to_markdown(FilePathInput(file_path=str(file))).markdown
+
+        elif ext in [".html", ".htm", ".url"]:
+            mcp_log("INFO", f"Using Trafilatura to extract {file.name}")
+            markdown = extract_webpage(UrlInput(url=file.read_text().strip())).markdown
+
+        else:
+            # Fallback
+            converter = MarkItDown()
+            mcp_log("INFO", f"Using MarkItDown fallback for {file.name}")
+            markdown = converter.convert(str(file)).text_content
+
+        if not markdown.strip():
+            mcp_log("WARN", f"No content extracted from {file.name}")
+            return None
+
+        # Semantic Chunking
+        if len(markdown.split()) < 10:
+             chunks = [markdown.strip()]
+        else:
+             chunks = semantic_merge(markdown)
+
+        # Embedding (Thread-safe usually)
+        embeddings_for_file = []
+        new_metadata = []
+        
+        # Don't use tqdm here to avoid interleaved bars
+        for i, chunk in enumerate(chunks):
+            embedding = get_embedding(chunk)
+            embeddings_for_file.append(embedding)
+            new_metadata.append({
+                "doc": file.name,
+                "chunk": chunk,
+                "chunk_id": f"{file.stem}_{i}"
+            })
+
+        return {
+            "file_name": file.name,
+            "fhash": fhash,
+            "embeddings": embeddings_for_file,
+            "metadata": new_metadata
+        }
+
+    except Exception as e:
+        mcp_log("ERROR", f"Failed to process {file.name}: {e}")
+        return None
+
 def process_documents():
     """Process documents and create FAISS index using unified multimodal strategy."""
-    mcp_log("INFO", "Indexing documents with unified RAG pipeline...")
+    mcp_log("INFO", "Indexing documents with unified RAG pipeline (Parallel)...")
     ROOT = Path(__file__).parent.resolve()
     DOC_PATH = ROOT / "documents"
     INDEX_CACHE = ROOT / "faiss_index"
@@ -328,77 +397,42 @@ def process_documents():
     METADATA_FILE = INDEX_CACHE / "metadata.json"
     CACHE_FILE = INDEX_CACHE / "doc_index_cache.json"
 
-    def file_hash(path):
-        return hashlib.md5(Path(path).read_bytes()).hexdigest()
-
     CACHE_META = json.loads(CACHE_FILE.read_text()) if CACHE_FILE.exists() else {}
     metadata = json.loads(METADATA_FILE.read_text()) if METADATA_FILE.exists() else []
     index = faiss.read_index(str(INDEX_FILE)) if INDEX_FILE.exists() else None
 
-    for file in DOC_PATH.glob("*.*"):
-        fhash = file_hash(file)
-        if file.name in CACHE_META and CACHE_META[file.name] == fhash:
-            mcp_log("SKIP", f"Skipping unchanged file: {file.name}")
-            continue
+    # Collect files
+    files = list(DOC_PATH.glob("*.*"))
+    
+    # Parallel Processing
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # Submit all tasks
+        future_to_file = {executor.submit(process_single_file, f, CACHE_META): f for f in files}
+        
+        for future in tqdm(as_completed(future_to_file), total=len(files), desc="Indexing Files"):
+            result = future.result()
+            if result:
+                # Update FAISS (Sequentially in main thread)
+                embeddings = result["embeddings"]
+                new_meta = result["metadata"]
+                
+                if embeddings:
+                    if index is None:
+                        dim = len(embeddings[0])
+                        index = faiss.IndexFlatL2(dim)
+                    
+                    index.add(np.stack(embeddings))
+                    metadata.extend(new_meta)
+                    CACHE_META[result["file_name"]] = result["fhash"]
+                    mcp_log("SAVE", f"Indexed {result['file_name']} ({len(embeddings)} chunks)")
 
-        mcp_log("PROC", f"Processing: {file.name}")
-        try:
-            ext = file.suffix.lower()
-            markdown = ""
-
-            if ext == ".pdf":
-                mcp_log("INFO", f"Using MuPDF4LLM to extract {file.name}")
-                markdown = convert_pdf_to_markdown(FilePathInput(file_path=str(file))).markdown
-
-            elif ext in [".html", ".htm", ".url"]:
-                mcp_log("INFO", f"Using Trafilatura to extract {file.name}")
-                markdown = extract_webpage(UrlInput(url=file.read_text().strip())).markdown
-
-            else:
-                # Fallback to MarkItDown for other formats
-                converter = MarkItDown()
-                mcp_log("INFO", f"Using MarkItDown fallback for {file.name}")
-                markdown = converter.convert(str(file)).text_content
-
-            if not markdown.strip():
-                mcp_log("WARN", f"No content extracted from {file.name}")
-                continue
-
-            if len(markdown.split()) < 10:
-                mcp_log("WARN", f"Content too short for semantic merge in {file.name} → Skipping chunking.")
-                chunks = [markdown.strip()]
-            else:
-                mcp_log("INFO", f"Running semantic merge on {file.name} with {len(markdown.split())} words")
-                chunks = semantic_merge(markdown)
-
-
-            embeddings_for_file = []
-            new_metadata = []
-            for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding {file.name}")):
-                embedding = get_embedding(chunk)
-                embeddings_for_file.append(embedding)
-                new_metadata.append({
-                    "doc": file.name,
-                    "chunk": chunk,
-                    "chunk_id": f"{file.stem}_{i}"
-                })
-
-            if embeddings_for_file:
-                if index is None:
-                    dim = len(embeddings_for_file[0])
-                    index = faiss.IndexFlatL2(dim)
-                index.add(np.stack(embeddings_for_file))
-                metadata.extend(new_metadata)
-                CACHE_META[file.name] = fhash
-
-                # ✅ Immediately save index and metadata
-                CACHE_FILE.write_text(json.dumps(CACHE_META, indent=2))
-                METADATA_FILE.write_text(json.dumps(metadata, indent=2))
-                faiss.write_index(index, str(INDEX_FILE))
-                mcp_log("SAVE", f"Saved FAISS index and metadata after processing {file.name}")
-
-        except Exception as e:
-            mcp_log("ERROR", f"Failed to process {file.name}: {e}")
+    # Save final state
+    if index:
+        CACHE_FILE.write_text(json.dumps(CACHE_META, indent=2))
+        METADATA_FILE.write_text(json.dumps(metadata, indent=2))
+        faiss.write_index(index, str(INDEX_FILE))
+        mcp_log("SUCCESS", "FAISS index saved.")
+    
     mcp_log("INFO", "READY")
 
 

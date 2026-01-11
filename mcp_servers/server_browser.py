@@ -63,6 +63,36 @@ async def web_extract_text(string: str) -> str:
     except Exception as e:
         return f"[Error] Extraction failed: {str(e)}"
 
+@mcp.tool()
+async def search_web_with_text_content(query: str, count: int = 3) -> str:
+    """
+    Search the web AND get text content from top results in one go.
+    Use this for: "Find out X", "Research Y".
+    Returns: A summary of top pages.
+    """
+    try:
+        # 1. Search
+        urls = await smart_search(query, count)
+        if not urls:
+            return "No results found."
+        
+        # 2. Parallel Extract
+        async def extract_safe(url):
+            try:
+                res = await smart_web_extract(url)
+                text = res.get("best_text", "")[:4000] # Cap per page
+                return f"SOURCE: {url}\nCONTENT: {text}\n---"
+            except:
+                return f"SOURCE: {url}\n[Failed to extract]\n---"
+
+        tasks = [extract_safe(url) for url in urls]
+        # use asyncio.gather for concurrency
+        results = await asyncio.gather(*tasks)
+        
+        return "\n\n".join(results)
+    except Exception as e:
+        return f"[Error] processing: {str(e)}"
+
 # --- Tool 2: Deep Vision Browsing (Browser Use) ---
 
 @mcp.tool()

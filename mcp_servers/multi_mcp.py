@@ -2,6 +2,7 @@
 import asyncio
 import sys
 import shutil
+import json
 from pathlib import Path
 from contextlib import AsyncExitStack
 from mcp import ClientSession, StdioServerParameters
@@ -9,31 +10,92 @@ from mcp.client.stdio import stdio_client
 from mcp.types import Tool
 from rich import print
 
+import yaml
+import subprocess
+
 class MultiMCP:
     def __init__(self):
         self.exit_stack = AsyncExitStack()
         self.sessions = {}  # server_name -> session
         self.tools = {}     # server_name -> [Tool]
-        self.server_configs = {
-            "browser": {
-                "command": "uv",
-                "args": ["run", "mcp_servers/server_browser.py"],
-            },
-            "rag": {
-                "command": "uv",
-                "args": ["run", "mcp_servers/server_rag.py"],
-            },
-            "sandbox": {
-                "command": "uv",
-                "args": ["run", "mcp_servers/server_sandbox.py"],
-            }
-        }
+        self.config_path = Path(__file__).parent.parent / "config" / "mcp_server_config.yaml"
+        self.cache_path = Path(__file__).parent / "mcp_cache.json"
+        
+        # Load Config Dynamically
+        self.server_configs = self._load_config()
+
+    def _load_config(self):
+        """Load server configs from YAML"""
+        if not self.config_path.exists():
+            print(f"[bold red]❌ Config not found: {self.config_path}[/bold red]")
+            return {}
+        
+        try:
+            with open(self.config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+                
+            servers = {}
+            for srv in data.get("mcp_servers", []):
+                server_id = srv.get("id")
+                # Normalize config for internal use
+                servers[server_id] = {
+                    "command": "uv", # Default to uv
+                    "args": ["run", srv.get("script")],
+                    "cwd": srv.get("cwd"),
+                    "env": srv.get("env", {}),
+                    "source": srv.get("source"), # For git
+                }
+            return servers
+        except Exception as e:
+            print(f"[bold red]❌ Failed to load config: {e}[/bold red]")
+            return {}
+
+    def _ensure_server_installed(self, name, config):
+        """Install server if it's from a git source"""
+        source = config.get("source")
+        if not source or not source.startswith("git+"):
+            return
+
+        # Simple caching logic
+        cache = {}
+        if self.cache_path.exists():
+            try:
+                cache = json.loads(self.cache_path.read_text())
+            except: pass
+            
+        repo_url = source.replace("git+", "")
+        install_dir = Path(__file__).parent / "installed" / name
+        
+        # If cache miss or dir missing, install
+        if name not in cache or not install_dir.exists():
+            print(f"[bold cyan]⬇️ Installing {name} from {repo_url}...[/bold cyan]")
+            install_dir.parent.mkdir(parents=True, exist_ok=True)
+            if install_dir.exists():
+                shutil.rmtree(install_dir)
+            
+            try:
+                subprocess.run(["git", "clone", repo_url, str(install_dir)], check=True, capture_output=True)
+                cache[name] = {"source": source, "path": str(install_dir)}
+                self.cache_path.write_text(json.dumps(cache, indent=2))
+                print(f"[bold green]✅ Installed {name}[/bold green]")
+            except Exception as e:
+                print(f"[bold red]❌ Failed to install {name}: {e}[/bold red]")
+
+        # Update args to point to installed script if needed
+        # This assumes the script path is relative to the repo root
+        if config["args"][1] and not Path(config["args"][1]).exists():
+             # Try finding it in installed dir
+             candidate = install_dir / config["args"][1]
+             if candidate.exists():
+                 config["args"][1] = str(candidate)
 
     async def start(self):
         """Start all configured servers"""
         print("[bold green]🚀 Starting MCP Servers...[/bold green]")
         
         for name, config in self.server_configs.items():
+            self._ensure_server_installed(name, config)
+            
             try:
                 # Check if uv exists, else fallback to python
                 cmd = config["command"]
@@ -49,8 +111,8 @@ class MultiMCP:
                     env=None 
                 )
                 
-                # Connect
-                read, write = await self.exit_stack.enter_async_context(stdio_client(server_params))
+                # Connect with increased timeout
+                read, write = await user_timeout(20, self.exit_stack.enter_async_context(stdio_client(server_params)))
                 session = await self.exit_stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 
@@ -130,3 +192,7 @@ class MultiMCP:
                 if tool.name == tool_name:
                     return await self.call_tool(name, tool_name, arguments)
         raise ValueError(f"Tool '{tool_name}' not found in any server")
+
+async def user_timeout(seconds, awaitable):
+    """Helper for timeout"""
+    return await asyncio.wait_for(awaitable, timeout=seconds)
