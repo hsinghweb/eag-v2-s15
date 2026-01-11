@@ -3,6 +3,7 @@
 import networkx as nx
 import json
 import time
+import ast
 from datetime import datetime
 from pathlib import Path
 import asyncio
@@ -57,6 +58,38 @@ class ExecutionContextManager:
         self.debug_mode = debug_mode
         self._live_display = None
 
+    
+    def update_with_plan(self, plan_graph: dict):
+        """Update graph with new plan (clearing old non-ROOT nodes)"""
+        # Remove all nodes except ROOT logic
+        # But for robustness, let's just add new nodes. 
+        # Actually, if we have a "PLANNING" node, we should probably mark it done or remove it?
+        # The prompt implies we replace the bootstrap graph with the real one.
+        
+        # 1. Identify nodes to keep (ROOT)
+        nodes_to_keep = ["ROOT"]
+        nodes_to_remove = [n for n in self.plan_graph.nodes if n not in nodes_to_keep]
+        self.plan_graph.remove_nodes_from(nodes_to_remove)
+        
+        # 2. Add new nodes from plan
+        for node in plan_graph.get("nodes", []):
+            self.plan_graph.add_node(node["id"], 
+                **node,
+                status='pending',
+                output=None,
+                error=None,
+                cost=0.0,
+                start_time=None,
+                end_time=None,
+                execution_time=0.0
+            )
+            
+        # 3. Add edges
+        for edge in plan_graph.get("edges", []):
+            self.plan_graph.add_edge(edge["source"], edge["target"])
+            
+        self._auto_save()
+
     def get_ready_steps(self):
         """Return all steps whose dependencies are complete and not yet run."""
         ready = []
@@ -88,6 +121,29 @@ class ExecutionContextManager:
         self.plan_graph.nodes[step_id]['status'] = 'running'
         self.plan_graph.nodes[step_id]['start_time'] = datetime.utcnow().isoformat()
         self._auto_save()
+
+    def _ensure_parsed_value(self, value):
+        """Helper to ensure stringified lists/dicts are parsed"""
+        if not isinstance(value, str):
+            return value
+            
+        value = value.strip()
+        # Fast check for potential list/dict
+        if not (value.startswith("[") and value.endswith("]")) and \
+           not (value.startswith("{") and value.endswith("}")):
+            return value
+            
+        # Try JSON first
+        try:
+            return json.loads(value)
+        except:
+            pass
+            
+        # Try AST literal_eval (handles single quotes)
+        try:
+            return ast.literal_eval(value)
+        except:
+            return value
 
     def _has_executable_code(self, output):
         """Universal detection of executable code patterns"""
@@ -370,7 +426,8 @@ class ExecutionContextManager:
         
         for read_key in reads:
             if read_key in globals_schema:
-                inputs[read_key] = globals_schema[read_key]
+                raw_value = globals_schema[read_key]
+                inputs[read_key] = self._ensure_parsed_value(raw_value)
             else:
                 print(f"⚠️  Missing dependency: '{read_key}' not found in globals_schema")
                 print(f"📋 Available keys: {list(globals_schema.keys())}")

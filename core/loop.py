@@ -33,45 +33,67 @@ class AgentLoop4:
             if file_result["success"]:
                 file_profiles = file_result["output"]
 
-        # Phase 2: Planning with AgentRunner
-        plan_result = await self.agent_runner.run_agent(
-            "PlannerAgent",
-            {
-                "original_query": query,
-                "planning_strategy": self.strategy,
-                "globals_schema": globals_schema,
-                "file_manifest": file_manifest,
-                "file_profiles": file_profiles
-            }
-        )
-
-        if not plan_result["success"]:
-            raise RuntimeError(f"Planning failed: {plan_result['error']}")
-
-        # Check if plan_graph exists
-        if 'plan_graph' not in plan_result['output']:
-            raise RuntimeError(f"PlannerAgent output missing 'plan_graph' key. Got: {list(plan_result['output'].keys())}")
+        # Phase 2: Bootstrap Graph & Planning
+        # ⚡ UX FIX: Initialize Context IMMEDIATELY with a "Planning" node.
+        # This prevents the "Infinite Spinner" by showing state relative to the user.
+        bootstrap_graph = {
+            "nodes": [
+                {
+                    "id": "PLANNING",
+                    "agent": "PlannerAgent",
+                    "description": "Generating execution plan...",
+                    "status": "running", # Show as running immediately
+                    "reads": [],
+                    "writes": []
+                }
+            ],
+            "edges": []
+        }
         
-        plan_graph = plan_result["output"]["plan_graph"]
-
         try:
-            # Phase 3: 100% NetworkX Graph-First Execution
+            # 1. Create Context with Bootstrap Graph
             context = ExecutionContextManager(
-                plan_graph,
+                bootstrap_graph,
                 session_id=None,
                 original_query=query,
                 file_manifest=file_manifest
             )
-            
-            # Add multi_mcp reference
             context.multi_mcp = self.multi_mcp
-            
-            # Initialize graph with file profiles and globals
             context.set_file_profiles(file_profiles)
             context.plan_graph.graph['globals_schema'].update(globals_schema)
+            
+            # 2. Run PlannerAgent (Planning Phase)
+            # visualization would ideally start here if it were async/live, 
+            # but since _execute_dag is below, we assume the UI (if external) reads the graph state.
+            # If using _execute_dag for console viz, we can't really "show" this unless we start viz separately.
+            # For now, we update the state to be correct.
+            
+            plan_result = await self.agent_runner.run_agent(
+                "PlannerAgent",
+                {
+                    "original_query": query,
+                    "planning_strategy": self.strategy,
+                    "globals_schema": globals_schema,
+                    "file_manifest": file_manifest,
+                    "file_profiles": file_profiles
+                }
+            )
+
+            if not plan_result["success"]:
+                # context.mark_failed("PLANNING", plan_result['error'])
+                raise RuntimeError(f"Planning failed: {plan_result['error']}")
+
+            if 'plan_graph' not in plan_result['output']:
+                raise RuntimeError(f"PlannerAgent output missing 'plan_graph' key.")
+            
+            plan_graph = plan_result["output"]["plan_graph"]
+
+            # 3. Update Context with REAL Plan
+            context.update_with_plan(plan_graph)
 
             # Phase 4: Execute DAG with visualization
             await self._execute_dag(context)
+
 
             # Phase 5: Return the CONTEXT OBJECT, not summary
             return context
