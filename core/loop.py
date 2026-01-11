@@ -301,8 +301,13 @@ class AgentLoop4:
                         inputs = {**inputs, **execution_data}  # Update inputs for iteration 2
                 
                 # Prepare input for next iteration
+                instruction = output.get("next_instruction", "Continue the task")
+                
+                if turn == max_turns - 1:
+                     instruction += " \n\n⚠️ WARNING: This is your FINAL turn. You MUST provide the final 'output' now. Do not call any more tools. Summarize what you have."
+
                 current_input = build_agent_input(
-                    instruction=output.get("next_instruction", "Continue the task"),
+                    instruction=instruction,
                     previous_output=output,
                     iteration_context=output.get("iteration_context", {})
                 )
