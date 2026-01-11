@@ -5,11 +5,11 @@ mcp_servers:
   #   transport: stdio
   #   description: "Most used Math tools, including special string-int conversions, fibonacci, python sandbox, shell and sql related tools"
   - id: documents
-    script: mcp_server_2.py
+    script: server_rag.py
     cwd: D:/Himanshu/EAG-V2/eag-v2-s15/mcp_servers
     description: "Load, search and extract within webpages, local PDFs or other documents. Web and document specialist"
   - id: websearch
-    script: mcp_server_3.py
+    script: server_browser.py
     cwd: D:/Himanshu/EAG-V2/eag-v2-s15/mcp_servers
     transport: stdio
     description: "Webtools to search internet for queries and fetch content for a specific web page"

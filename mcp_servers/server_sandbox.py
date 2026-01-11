@@ -3,9 +3,9 @@ import sys
 import os
 from pathlib import Path
 
-# Fix Path: Add '16_NetworkX' to sys.path so we can import 'tools' and 'core'
-# Current file: .../16_NetworkX/mcp_servers/server_sandbox.py
-# We want: .../16_NetworkX/
+# Fix Path: Add project root to sys.path so we can import 'tools' and 'core'
+# Current file: .../mcp_servers/server_sandbox.py
+# We want: .../
 root_dir = Path(__file__).parent.parent
 sys.path.append(str(root_dir))
 
