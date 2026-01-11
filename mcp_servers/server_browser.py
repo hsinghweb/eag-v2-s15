@@ -23,8 +23,12 @@ except ImportError:
 
 load_dotenv()
 
+# Fix Path: Add project root to sys.path so we can import 'tools' 
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(root_dir)
+
 # Initialize FastMCP server
-mcp = FastMCP("hybrid-browser", timeout=60)
+mcp = FastMCP("hybrid-browser")
 
 # --- Tool 1: Fast Text Search (DuckDuckGo + Extraction) ---
 
