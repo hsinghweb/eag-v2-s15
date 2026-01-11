@@ -317,12 +317,18 @@ class ExecutionContextManager:
             try:
                 user_response = self._handle_user_interaction_rich(output)
                 writes_to = output.get("writes_to", "user_response")
-                self.plan_graph.graph['globals_schema'][writes_to] = user_response
+                
+                # 🧠 MEMORY FIX: Save Rich Context (Question + Answer)
+                clarification_msg = output.get("clarificationMessage", "Unknown Question")
+                rich_context = f'Agent asked: "{clarification_msg}"\nUser said: "{user_response}"'
+                
+                self.plan_graph.graph['globals_schema'][writes_to] = rich_context
                 
                 output = output.copy()
                 output["user_response"] = user_response
+                output[writes_to] = rich_context # Ensure extraction logic sees it
                 output["interaction_completed"] = True
-                print(f"✅ User input captured: {writes_to} = '{user_response}'")
+                print(f"✅ User input captured: {writes_to} = '{rich_context}'")
                 
             except Exception as e:
                 print(f"❌ User interaction failed: {e}")
