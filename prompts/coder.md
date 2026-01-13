@@ -41,6 +41,15 @@ You must return this JSON:
 - **Data Science**: `numpy`, `pandas` are GUARANTEED.
 - **RESTRICTION**: Do not import `requests`, `yfinance`, `beautifulsoup4`, or other external PyPI packages unless you are certain they are installed. Prefer standard libraries or tools for fetching data.
 
+## 🛑 STRICT ENVIRONMENT CONSTRAINTS (HEADLESS SERVER)
+- **NO GUI CALLS**: You are running on a headless server.
+  - ❌ `plt.show()`, `cv2.imshow()`, `fig.show()` -> WILL CRASH THE SERVER.
+  - ❌ `input()`, `print(..., end="")` (interactive) -> WILL HANG FOREVER.
+- **PLOT SAVING**: Always save plots to files.
+  - ✅ `plt.savefig("output/graph.png")`
+  - ✅ Use `matplotlib.use('Agg')` before importing pyplot.
+- **NO BROWSER**: You have no web browser. Do not try to use `selenium` or `playwright` directly. Use provided Tools.
+
 ---
 
 ## ✅ FILE HANDLING
