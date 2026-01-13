@@ -101,10 +101,24 @@ class MultiMCP:
                 cmd = config["command"]
                 if cmd == "uv" and not shutil.which("uv"):
                     cmd = sys.executable
-                    args = [config["args"][1]] # just the script path
+                    script_path = config["args"][1]
+                    # If CWD is provided, resolve script against it
+                    if config.get("cwd"):
+                        script_path = str(Path(config["cwd"]) / script_path)
+                    args = [script_path]
                 else:
-                    args = config["args"]
-
+                    # UV mode: Ensure script path is absolute or correct
+                    args = list(config["args"]) # copy
+                    script_path = args[1]
+                    if config.get("cwd"):
+                        # Resolve script absolute path
+                        # config["cwd"] is absolute in yaml
+                        abs_script = Path(config["cwd"]) / script_path
+                        if abs_script.exists():
+                            args[1] = str(abs_script)
+                            
+                # Note: StdioServerParameters in current SDK might not support 'cwd' param.
+                # So we rely on absolute path to script.
                 server_params = StdioServerParameters(
                     command=cmd,
                     args=args,
