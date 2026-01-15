@@ -377,17 +377,21 @@ const SamyakAgentUI = () => {
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 custom-scrollbar">
                 {messages.map((m, i) => (
                   <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed shadow-sm ${m.role === 'user'
+                    <div
+                      className={`max-w-[85%] px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed shadow-sm prose-slim ${m.role === 'user'
                         ? 'bg-blue-600 text-white rounded-tr-none'
                         : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'
-                      }`}>
-                      {m.content}
-                    </div>
+                        }`}
+                      dangerouslySetInnerHTML={{
+                        __html: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2)
+                      }}
+                    />
                     <span className="text-[9px] text-slate-400 mt-1 font-bold">
-                      {m.role.toUpperCase()} • {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                      {m.role?.toUpperCase()} • {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                     </span>
                   </div>
                 ))}
+
                 {status === 'running' && (
                   <div className="flex flex-col items-start translate-y-1">
                     <div className="bg-slate-50 border border-slate-100 px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-2 shadow-sm">
