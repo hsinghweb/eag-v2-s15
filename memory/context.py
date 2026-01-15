@@ -41,16 +41,21 @@ class ExecutionContextManager:
 
         # Build plan DAG
         for node in plan_graph.get("nodes", []):
-            self.plan_graph.add_node(node["id"], 
-                **node,
-                status='pending',
-                output=None,
-                error=None,
-                cost=0.0,
-                start_time=None,
-                end_time=None,
-                execution_time=0.0
-            )
+            # Prepare node attributes, ensuring defaults override or exist
+            node_attrs = node.copy()
+            defaults = {
+                'status': 'pending',
+                'output': None,
+                'error': None,
+                'cost': 0.0,
+                'start_time': None,
+                'end_time': None,
+                'execution_time': 0.0
+            }
+            # We want to enforce these initial states
+            node_attrs.update(defaults)
+            
+            self.plan_graph.add_node(node["id"], **node_attrs)
             
         for edge in plan_graph.get("edges", []):
             self.plan_graph.add_edge(edge["source"], edge["target"])

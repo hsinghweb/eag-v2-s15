@@ -53,7 +53,7 @@ The code must be valid Python. You can assign variables and return a dictionary.
   "result_variable_T001": [],
   "call_self": false,
   "code_variants": {
-    "CODE_2A": "results = []\nif isinstance(found_urls_T001, list):\n    for url in found_urls_T001:\n        if isinstance(url, str) and url.startswith('http'):\n            text = web_extract_text(url)\n            results.append({'url': url, 'content': text})\nreturn {'result_variable_T001': results}"
+    "CODE_2A": "results = []\n# CRITICAL: Check if input var exists; if not, SEARCH first\nurls_to_process = found_urls_T001 if 'found_urls_T001' in locals() else web_search('query', 5)\n\nif isinstance(urls_to_process, list):\n    for url in urls_to_process:\n        if isinstance(url, str) and url.startswith('http'):\n            text = web_extract_text(url)\n            results.append({'url': url, 'content': text})\nreturn {'result_variable_T001': results}"
   }
 }
 ```

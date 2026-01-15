@@ -36,6 +36,7 @@ You must return this JSON:
 - Emit raw **Python** code only — no markdown or prose.
 - Do **not** use `def` main() or `if __name__ == "__main__"`. Just write script code.
 - Every block must end with a `return { ... }` containing named outputs.
+- **CRITICAL**: If you return `{'key': var}`, `var` MUST be defined in your code above. Do not hallucinate variables.
 - Access prior step variables directly (e.g., `if some_var:`), never via `globals_schema.get(...)` (they are injected).
 - **Use standard libraries**: `math`, `datetime`, `json`, `re`, `random`, `urllib`, `collections`.
 - **Data Science**: `numpy`, `pandas` are GUARANTEED.

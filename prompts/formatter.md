@@ -35,15 +35,12 @@ You must return a JSON object like:
 {
   "final_format": "html",
   "fallback_markdown": "Minimal markdown fallback",
-  "formatted_report_T009": "<div class='report'>...</div>",
+  "<variable_from_writes_field>": "<div class='report'>...</div>",
   "call_self": false
 }
 ```
 
-## ✅ TONE & QUALITY BAR
-- Professional, actionable, high-trust.
-- NEVER create simple tables. Create COMPREHENSIVE REPORTS.
-- Use `all_globals_schema` to find hidden details.
-
 ## ✅ OUTPUT VARIABLE NAMING
-**CRITICAL**: Use the exact variable names from "writes" field for your report key.
+**CRITICAL**: You MUST use the exact key provided in the `writes` list (e.g., `formatted_revenue_summary_T003`). Do NOT use generic keys like `formatted_report` or `output`.
+- Look at `writes`: `["output_key_T001"]`
+- Use key: `output_key_T001`
