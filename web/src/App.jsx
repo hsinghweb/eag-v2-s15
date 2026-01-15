@@ -20,8 +20,12 @@ import {
   Clock,
   Send,
   Loader2,
-  Trash2
+  Trash2,
+  DollarSign,
+  FileText
 } from 'lucide-react';
+
+
 import AgentNode from './components/AgentNode';
 
 const nodeTypes = {
@@ -242,8 +246,8 @@ const SamyakAgentUI = () => {
                   type="submit"
                   disabled={!input.trim() || status === 'running'}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${!input.trim() || status === 'running'
-                      ? 'bg-slate-100 text-slate-300'
-                      : 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:scale-105 active:scale-95'
+                    ? 'bg-slate-100 text-slate-300'
+                    : 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:scale-105 active:scale-95'
                     }`}
                 >
                   {status === 'running' ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
@@ -342,8 +346,8 @@ const SidebarIcon = ({ icon, active = false, onClick = null, label = "" }) => (
   <button
     onClick={onClick}
     className={`p-3 rounded-xl transition-all relative group ${active
-        ? 'bg-blue-50 text-blue-600'
-        : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
+      ? 'bg-blue-50 text-blue-600'
+      : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
       }`}
     title={label}
   >
