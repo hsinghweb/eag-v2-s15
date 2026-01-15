@@ -4,11 +4,15 @@ import sys
 import os
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import uuid
+from datetime import datetime
+import networkx as nx
+
 
 # Add project root to python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +22,71 @@ from mcp_servers.multi_mcp import MultiMCP
 from core.utils import set_event_callback
 
 app = FastAPI(title="SamyakAgent API")
+
+# ─── Models ──────────────────────────────────────────────────────────
+
+class Message(BaseModel):
+    role: str # 'user' or 'agent'
+    content: Any # Allow strings or dicts/lists for flexibility, but formatted to str in chat
+    timestamp: Optional[str] = None
+
+
+class Session(BaseModel):
+    id: str
+    title: str
+    messages: List[Message] = []
+    graph_data: Optional[Dict[str, Any]] = None
+    last_updated: Optional[str] = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+
+# ... (CORS remains same) ...
+
+# ─── Session Manager ────────────────────────────────────────────────
+
+SESSION_DIR = Path("memory/web_sessions")
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+class SessionStore:
+    def __init__(self):
+        self.sessions: Dict[str, Session] = {}
+        self._load_sessions()
+
+    def _load_sessions(self):
+        for f in SESSION_DIR.glob("*.json"):
+            try:
+                with open(f, 'r', encoding='utf-8') as f_in:
+                    data = json.load(f_in)
+                    self.sessions[data['id']] = Session(**data)
+            except Exception as e:
+                print(f"Failed to load session {f}: {e}")
+
+    def save_session(self, session: Session):
+        session.last_updated = datetime.now().isoformat()
+        self.sessions[session.id] = session
+        f_path = SESSION_DIR / f"{session.id}.json"
+        with open(f_path, 'w', encoding='utf-8') as f_out:
+            json.dump(session.dict(), f_out, indent=2, default=str)
+
+    def get_session(self, session_id: str) -> Session:
+        return self.sessions.get(session_id)
+
+    def list_sessions(self) -> List[Session]:
+        return sorted(self.sessions.values(), key=lambda x: x.last_updated, reverse=True)
+
+    def delete_session(self, session_id: str):
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            f_path = SESSION_DIR / f"{session_id}.json"
+            if f_path.exists():
+                f_path.unlink()
+
+session_store = SessionStore()
+
 
 # Allow CORS for frontend dev
 app.add_middleware(
@@ -98,8 +167,8 @@ async def shutdown_event():
 
 # ─── API Endpoints ─────────────────────────────────────────────────
 
-class ChatRequest(BaseModel):
-    message: str
+# Removed duplicate ChatRequest
+
 
 @app.get("/health")
 async def health_check():
@@ -117,15 +186,42 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-async def run_agent_task(query: str):
+@app.get("/api/sessions")
+async def get_sessions():
+    return session_store.list_sessions()
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: str):
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    session_store.delete_session(session_id)
+    return {"status": "ok"}
+
+async def run_agent_task(query: str, session_id: str):
     """Background task to run the agent loop"""
     if state.is_running:
         await manager.broadcast({"type": "error", "data": {"message": "Agent already running"}})
         return
 
     state.is_running = True
-    await manager.broadcast({"type": "status", "data": {"status": "running"}})
+    await manager.broadcast({"type": "status", "data": {"status": "running", "session_id": session_id}})
     
+    # Get or create session
+    session = session_store.get_session(session_id)
+    if not session:
+        session = Session(id=session_id, title=query[:50] + "...")
+        session_store.save_session(session)
+
+    # Add user message
+    user_msg = Message(role="user", content=query, timestamp=datetime.now().isoformat())
+    session.messages.append(user_msg)
+    session_store.save_session(session)
+
     try:
         # Run the agent loop
         context = await state.agent_loop.run(
@@ -137,15 +233,54 @@ async def run_agent_task(query: str):
         
         # Extract final answer
         summary = context.get_execution_summary()
-        final_answer = summary.get("final_outputs", "No final output found.")
+        outputs = summary.get("final_outputs", {})
         
+        # Format final answer for chat history
+        if not outputs:
+            final_answer = "No final output found."
+        elif isinstance(outputs, dict):
+            # If there's a primary key like 'answer' or 'response', use it
+            found = False
+            for k in ['answer', 'response', 'output', 'result', 'formatted_answer']:
+                if k in outputs:
+                    final_answer = str(outputs[k])
+                    found = True
+                    break
+            
+            if not found:
+                if len(outputs) == 1:
+                    final_answer = str(next(iter(outputs.values())))
+                else:
+                    # Clean up: Join all values that look like strings
+                    parts = []
+                    for k, v in outputs.items():
+                        if isinstance(v, (str, int, float, bool)):
+                            parts.append(str(v))
+                        else:
+                            parts.append(json.dumps(v, indent=2))
+                    final_answer = "\n\n".join(parts)
+        else:
+            final_answer = str(outputs)
+        
+        # Capture graph state
+        graph_data = nx.node_link_data(context.plan_graph)
+        session.graph_data = graph_data
+
+        # Add agent message
+        agent_msg = Message(role="agent", content=final_answer, timestamp=datetime.now().isoformat())
+        session.messages.append(agent_msg)
+        session_store.save_session(session)
+
         await manager.broadcast({
             "type": "finish", 
             "data": {
                 "success": True, 
-                "output": final_answer
+                "output": final_answer,
+                "session_id": session_id,
+                "messages": session.messages
             }
         })
+
         
     except Exception as e:
         import traceback
@@ -154,20 +289,23 @@ async def run_agent_task(query: str):
             "type": "finish", 
             "data": {
                 "success": False, 
-                "error": str(e)
+                "error": str(e),
+                "session_id": session_id
             }
         })
     finally:
         state.is_running = False
-        await manager.broadcast({"type": "status", "data": {"status": "idle"}})
+        await manager.broadcast({"type": "status", "data": {"status": "idle", "session_id": session_id}})
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
     if state.is_running:
         return {"status": "error", "message": "Agent is busy"}
     
-    background_tasks.add_task(run_agent_task, request.message)
-    return {"status": "accepted", "message": "Agent started"}
+    session_id = request.session_id or str(uuid.uuid4())
+    background_tasks.add_task(run_agent_task, request.message, session_id)
+    return {"status": "accepted", "message": "Agent started", "session_id": session_id}
+
 
 if __name__ == "__main__":
     import uvicorn

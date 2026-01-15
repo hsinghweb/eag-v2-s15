@@ -38,12 +38,77 @@ const SamyakAgentUI = () => {
   const [logs, setLogs] = useState([]);
   const [input, setInput] = useState('');
   const [selectedNode, setSelectedNode] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [messages, setMessages] = useState([]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
   const API_BASE = "http://localhost:8000";
   const WS_URL = "ws://localhost:8000/ws/events";
+
+
+  // Initial Load
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  const loadSessions = async () => {
+    try {
+      const resp = await axios.get(`${API_BASE}/api/sessions`);
+      setSessions(resp.data);
+      if (resp.data.length > 0 && !currentSessionId) {
+        handleSwitchSession(resp.data[0].id);
+      } else if (resp.data.length === 0) {
+        handleNewChat();
+      }
+    } catch (err) {
+      console.error("Failed to load sessions:", err);
+    }
+  };
+
+  const handleSwitchSession = async (sid) => {
+    try {
+      const resp = await axios.get(`${API_BASE}/api/sessions/${sid}`);
+      const session = resp.data;
+      setCurrentSessionId(sid);
+      setMessages(session.messages || []);
+      if (session.graph_data) {
+        updateGraph(session.graph_data);
+      } else {
+        setNodes([]);
+        setEdges([]);
+      }
+      setLogs([]); // Clear logs for new session
+      setSelectedNode(null);
+    } catch (err) {
+      console.error("Failed to switch session:", err);
+    }
+  };
+
+  const handleNewChat = () => {
+    setCurrentSessionId(null);
+    setMessages([]);
+    setNodes([]);
+    setEdges([]);
+    setLogs([]);
+    setSelectedNode(null);
+    setActiveTab('runs');
+  };
+
+  const handleDeleteSession = async (e, sid) => {
+    e.stopPropagation();
+    try {
+      await axios.delete(`${API_BASE}/api/sessions/${sid}`);
+      if (currentSessionId === sid) {
+        handleNewChat();
+      }
+      loadSessions();
+    } catch (err) {
+      console.error("Failed to delete session:", err);
+    }
+  };
 
   // WebSocket Connection
   useEffect(() => {
@@ -54,9 +119,20 @@ const SamyakAgentUI = () => {
     ws.onmessage = (event) => {
       const { type, data } = JSON.parse(event.data);
 
+      // Filter events by current session if relevant
+      if (data.session_id && currentSessionId && data.session_id !== currentSessionId) {
+        // Optional: If it's a finish event for another session, we might want to update the sessions list
+        if (type === 'finish') loadSessions();
+        return;
+      }
+
       switch (type) {
         case 'status':
           setStatus(data.status);
+          if (data.session_id && !currentSessionId) {
+            setCurrentSessionId(data.session_id);
+            loadSessions();
+          }
           break;
         case 'log':
           setLogs(prev => [...prev, data]);
@@ -65,6 +141,8 @@ const SamyakAgentUI = () => {
           updateGraph(data);
           break;
         case 'finish':
+          loadSessions();
+          if (data.messages) setMessages(data.messages);
           if (!data.success) {
             setLogs(prev => [...prev, { title: "Error", payload: data.error, symbol: "❌" }]);
           }
@@ -130,13 +208,24 @@ const SamyakAgentUI = () => {
     setEdges([]);
     setSelectedNode(null);
 
+    // Optimistically add user message if we want, but backend does it too
+    setMessages(prev => [...prev, { role: 'user', content: input, timestamp: new Date().toISOString() }]);
+
     try {
-      await axios.post(`${API_BASE}/api/chat`, { message: input });
+      const resp = await axios.post(`${API_BASE}/api/chat`, {
+        message: input,
+        session_id: currentSessionId
+      });
+      if (resp.data.session_id && !currentSessionId) {
+        setCurrentSessionId(resp.data.session_id);
+        loadSessions();
+      }
       setInput('');
     } catch (err) {
       console.error("Failed to start agent:", err);
     }
   };
+
 
   const currentDetails = useMemo(() => {
     if (selectedNode) return selectedNode.data;
@@ -160,11 +249,60 @@ const SamyakAgentUI = () => {
         </nav>
 
         <div className="mt-auto flex flex-col gap-4">
+          <SidebarIcon icon={<Plus size={20} />} label="New Chat" onClick={handleNewChat} />
           <SidebarIcon icon={<Settings size={20} />} label="Settings" />
         </div>
       </aside>
 
+      {/* Sessions Sidebar */}
+      <aside className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0 overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <h2 className="text-xs font-extrabold text-slate-400 tracking-widest uppercase">Chat History</h2>
+          <button onClick={handleNewChat} className="p-1 hover:bg-slate-50 rounded text-blue-600 transition-colors">
+            <Plus size={16} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
+          {sessions.map(s => (
+            <div
+              key={s.id}
+              onClick={() => handleSwitchSession(s.id)}
+              className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${currentSessionId === s.id ? 'bg-blue-50 text-blue-600 shadow-sm border border-blue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border border-transparent'
+                }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <MessageSquare size={16} className={currentSessionId === s.id ? 'text-blue-500' : 'text-slate-400'} />
+                <span className="text-xs font-bold truncate pr-2">{s.title || "Untitled Chat"}</span>
+              </div>
+              <button
+                onClick={(e) => handleDeleteSession(e, s.id)}
+                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 hover:text-red-500 rounded transition-all"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+          {sessions.length === 0 && (
+            <div className="p-8 text-center text-slate-400 italic text-[10px]">
+              No sessions found
+            </div>
+          )}
+        </div>
+        <div className="p-4 border-t border-slate-100 bg-slate-50/50">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-slate-500 font-bold text-xs uppercase">
+              H
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] font-extrabold truncate uppercase">Himanshu</div>
+              <div className="text-[9px] text-slate-400 truncate tracking-tighter">Pro Developer</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
         {/* Header */}
         <header className="h-14 border-b border-slate-200 bg-white flex items-center justify-between px-6 shrink-0 z-10">
           <div className="flex items-center gap-4">
@@ -198,7 +336,7 @@ const SamyakAgentUI = () => {
           <div className="flex-1 relative bg-[#fcfdfe] overflow-hidden flex flex-col">
 
             {/* React Flow Graph */}
-            <div className="flex-1">
+            <div className={`flex-1 transition-all duration-500 ${activeTab === 'runs' ? 'visible relative' : 'hidden md:block absolute inset-0 opacity-0 pointer-events-none'}`}>
               {nodes.length > 0 ? (
                 <ReactFlow
                   nodes={nodes}
@@ -209,11 +347,11 @@ const SamyakAgentUI = () => {
                   onNodeClick={(e, node) => setSelectedNode(node)}
                   fitView
                 >
-                  <Background color="#e2e8f0" gap={20} />
+                  <Background color="#f1f5f9" gap={20} />
                   <Controls className="!bg-white !border-slate-200 !shadow-sm" />
                 </ReactFlow>
               ) : (
-                <div className="flex-1 flex items-center justify-center">
+                <div className="flex-1 flex items-center justify-center h-full">
                   <div className="text-center animate-in fade-in zoom-in duration-500">
                     <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-slate-100 shadow-sm">
                       <Cpu size={40} className="text-slate-300" />
@@ -224,6 +362,53 @@ const SamyakAgentUI = () => {
                 </div>
               )}
             </div>
+
+            {/* Chat History View (Always visible if messages exist) */}
+            <div className={`flex-1 flex flex-col overflow-hidden transition-all duration-500 ${activeTab === 'chat' ? 'visible relative' : 'absolute bottom-24 right-8 w-80 h-96 bg-white border border-slate-200 rounded-2xl shadow-2xl z-20 pointer-events-auto overflow-hidden opacity-100'}`}>
+              <div className="p-4 border-b border-slate-100 bg-white/80 backdrop-blur shrink-0 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={14} className="text-blue-500" />
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500">Conversation</span>
+                </div>
+                <button onClick={() => setActiveTab(activeTab === 'chat' ? 'runs' : 'chat')} className="p-1 hover:bg-slate-100 rounded">
+                  {activeTab === 'chat' ? <LayoutIcon size={14} /> : <Activity size={14} />}
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 custom-scrollbar">
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed shadow-sm ${m.role === 'user'
+                        ? 'bg-blue-600 text-white rounded-tr-none'
+                        : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'
+                      }`}>
+                      {m.content}
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-1 font-bold">
+                      {m.role.toUpperCase()} • {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    </span>
+                  </div>
+                ))}
+                {status === 'running' && (
+                  <div className="flex flex-col items-start translate-y-1">
+                    <div className="bg-slate-50 border border-slate-100 px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-2 shadow-sm">
+                      <div className="flex gap-1">
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce delay-0"></div>
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce delay-150"></div>
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce delay-300"></div>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Analyzing...</span>
+                    </div>
+                  </div>
+                )}
+                {messages.length === 0 && (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-300 py-12">
+                    <MessageSquare size={32} className="mb-2 opacity-50" />
+                    <p className="text-[10px] font-bold uppercase tracking-widest">No messages yet</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
 
             {/* Floating Chat Input */}
             <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-10">
@@ -374,6 +559,8 @@ const DetailLabel = ({ icon, label }) => (
   </div>
 );
 
+const Plus = ({ size }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>;
 const LayoutIcon = ({ size }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>;
+
 
 export default SamyakAgentUI;
