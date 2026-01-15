@@ -4,16 +4,44 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+# Global event callback for WebSocket streaming
+_event_callback = None
+
+def set_event_callback(callback):
+    """Register a callback for log events: callback(event_type, data)"""
+    global _event_callback
+    _event_callback = callback
+
+def emit_event(event_type: str, data: dict):
+    """Emit an event to the registered callback"""
+    if _event_callback:
+        _event_callback(event_type, data)
+
 def log_step(title: str, payload=None, symbol: str = "🟢"):
     print(f"\n[b]{symbol} {title}[/b]")
     if payload:
         from pprint import pprint
         pprint(payload)
+    
+    # Emit event
+    emit_event("log", {
+        "title": title,
+        "payload": payload,
+        "symbol": symbol,
+        "timestamp": datetime.now().isoformat()
+    })
 
 def log_error(message: str, err: Exception = None):
     print(f"\n[red]❌ {message}[/red]")
     if err:
         print(f"[dim]{str(err)}[/dim]")
+
+    # Emit event
+    emit_event("error", {
+        "message": message,
+        "error": str(err) if err else None,
+        "timestamp": datetime.now().isoformat()
+    })
 
 def log_json_block(title: str, block):
     from rich.panel import Panel

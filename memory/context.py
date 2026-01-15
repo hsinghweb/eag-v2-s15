@@ -7,7 +7,7 @@ import ast
 from datetime import datetime
 from pathlib import Path
 import asyncio
-from tools.sandbox import run_user_code
+from core.utils import run_user_code, emit_event
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
@@ -15,6 +15,7 @@ from rich.text import Text
 
 class ExecutionContextManager:
     def __init__(self, plan_graph: dict, session_id: str = None, original_query: str = None, file_manifest: list = None, debug_mode: bool = False):
+
         # 🎯 Build NetworkX graph with ALL data
         self.plan_graph = nx.DiGraph()
         
@@ -62,6 +63,9 @@ class ExecutionContextManager:
 
         self.debug_mode = debug_mode
         self._live_display = None
+        
+        # Emit initial graph state
+        self._emit_graph_update()
 
     
     def update_with_plan(self, plan_graph: dict):
@@ -94,6 +98,7 @@ class ExecutionContextManager:
             self.plan_graph.add_edge(edge["source"], edge["target"])
             
         self._auto_save()
+        self._emit_graph_update()
 
     def get_ready_steps(self):
         """Return all steps whose dependencies are complete and not yet run."""
@@ -126,6 +131,7 @@ class ExecutionContextManager:
         self.plan_graph.nodes[step_id]['status'] = 'running'
         self.plan_graph.nodes[step_id]['start_time'] = datetime.utcnow().isoformat()
         self._auto_save()
+        self._emit_graph_update()
 
     def _ensure_parsed_value(self, value):
         """Helper to ensure stringified lists/dicts are parsed"""
@@ -411,6 +417,7 @@ class ExecutionContextManager:
         
         print(f"✅ {step_id} completed successfully")
         self._auto_save()
+        self._emit_graph_update()
 
     def mark_failed(self, step_id, error=None):
         """Mark step as failed"""
@@ -425,6 +432,7 @@ class ExecutionContextManager:
             node_data['execution_time'] = (end - start).total_seconds()
             
         self._auto_save()
+        self._emit_graph_update()
 
     def get_step_data(self, step_id):
         """Get all step data from graph"""
@@ -562,3 +570,8 @@ class ExecutionContextManager:
         context.plan_graph = plan_graph
         context.debug_mode = debug_mode
         return context
+
+    def _emit_graph_update(self):
+        """Emit current graph state to listeners"""
+        graph_data = nx.node_link_data(self.plan_graph)
+        emit_event("graph_update", graph_data)
