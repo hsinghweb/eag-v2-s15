@@ -7,7 +7,8 @@ import ast
 from datetime import datetime
 from pathlib import Path
 import asyncio
-from core.utils import run_user_code, emit_event
+from core.utils import emit_event
+from tools.sandbox import run_user_code
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
