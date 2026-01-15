@@ -26,6 +26,7 @@ You retrieve **raw data as-is**.
 
 - `web_search(query: str, count: int)`: Returns a list of URLs.
 - `web_extract_text(url: str)`: Returns the text content of a URL.
+- `search_web_with_text_content(query: str, count: int)`: **POWER TOOL**. Searches AND extracts text in one matched call. Use this for efficiently finding specific answers.
 - `search_stored_documents_rag(query: str)`: Searches internal documents.
 
 ---
@@ -35,7 +36,18 @@ You retrieve **raw data as-is**.
 You MUST return a JSON object with `code_variants` containing Python code.
 The code must be valid Python. You can assign variables and return a dictionary.
 
-### **Multi-Step Mode (Search then Extract):**
+### **Single-Step Mode (Power Search - RECOMMENDED):**
+```json
+{
+  "result_variable_T001": [],
+  "call_self": false,
+  "code_variants": {
+    "CODE_1A": "summary = search_web_with_text_content('query', 3)\nreturn {'result_variable_T001': summary}"
+  }
+}
+```
+
+### **Multi-Step Mode (Manual Search then Extract):**
 ```json
 {
   "result_variable_T001": [],
